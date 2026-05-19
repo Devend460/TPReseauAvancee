@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "dedicated_server",
+    "orchestrator",
+    "gatekeeper",
+    "shared"
+]
+
+# Centralized dependency management
+[workspace.dependencies]
+shared = { path = "./shared" }
+bevy = { version = "0.15", default-features = false, features = ["minimal_plugins"] } # Note: Bevy 0.15 is the stable variant; adjust to your course's specific 0.18-dev/fork if needed.
+game_sockets = "0.1.0" # Replace with the exact version/git path provided in your course
+tokio = { version = "1.38", features = ["full"] }
+axum = "0.7"
+redis = { version = "0.25", features = ["tokio-comp", "json"] }
+deadpool-redis = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.8", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+thiserror = "1.0"

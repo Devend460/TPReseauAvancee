@@ -1,0 +1,17 @@
+[package]
+name = "gatekeeper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shared.workspace = true
+tokio.workspace = true
+axum.workspace = true
+redis.workspace = true
+deadpool-redis.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
