@@ -9,7 +9,7 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
-    command: redis-server --appendonly yes # Enables data persistence so servers stay registered if Redis restarts
+    command: redis-server --appendonly yes
 
 volumes:
   redis_data:
