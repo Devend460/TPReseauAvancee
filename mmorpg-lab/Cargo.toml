@@ -10,16 +10,23 @@ members = [
 # Centralized dependency management
 [workspace.dependencies]
 shared = { path = "./shared" }
-bevy = { version = "0.15", default-features = false, features = ["minimal_plugins"] } # Note: Bevy 0.15 is the stable variant; adjust to your course's specific 0.18-dev/fork if needed.
-game_sockets = "0.1.0" # Replace with the exact version/git path provided in your course
-tokio = { version = "1.38", features = ["full"] }
-axum = "0.7"
-redis = { version = "0.25", features = ["tokio-comp", "json"] }
-deadpool-redis = "0.15"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-uuid = { version = "1.8", features = ["v4", "serde"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-anyhow = "1.0"
-thiserror = "1.0"
+bevy = { version = "0.18", default-features = false }
+#game_sockets =
+quinn = "0.11.9"
+tokio = { version = "1.52.3", features = ["full"] }
+axum = "0.8.9"
+redis = { version = "1.2.1", features = ["tokio-comp", "json"] }
+deadpool-redis = "0.23.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+uuid = { version = "1.23.1", features = ["v4", "serde"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+anyhow = "1.0.102"
+thiserror = "2.0.18"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
