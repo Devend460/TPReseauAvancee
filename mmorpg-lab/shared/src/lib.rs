@@ -10,9 +10,12 @@ pub struct Heartbeat {
     pub max_players: usize,
 }
 
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ServerInfo {
     pub ip: String,
     pub port: u16,
     pub zone: String,
+    pub status: String,
+    pub player_count: usize
 }

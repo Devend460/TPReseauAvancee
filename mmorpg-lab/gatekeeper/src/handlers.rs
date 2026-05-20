@@ -2,26 +2,33 @@ use axum::{extract::State, Json, http::StatusCode};
 use std::sync::Arc;
 use serde::Deserialize;
 use crate::AppState;
+use crate::redis_pool;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
 }
-pub async fn login_handler(State(state): State<Arc<AppState>>, Json(payload): Json<LoginRequest>) -> Json<serde_json::Value> {
+pub async fn login_handler(State(state): State<Arc<AppState>>, Json(payload): Json<LoginRequest>) -> (StatusCode, Json<serde_json::Value>) {
 
 
     //401 Credential pas valide
     let username = payload.username.clone();
     let password = payload.password.clone();
-    if (username.is_empty() || password == "1234"){
-        return Json(serde_json::json!({"error":"No server avaible"}));
+    if (username.is_empty() || password != "1234"){
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Credential pas valide"})));
     }
 
+    //Get du server
 
-    //503 Pas de serveur trouver
+    let (status_code, json_response) = redis_pool::find_available_server(&state.redis_pool).await.unwrap_or_else(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Redis a buger"}))
+        )
+    });
 
-    //200 tout vas bien
+    return (status_code,json_response);
 
-    return Json(serde_json::json!({})) //temp le temps de faire les if pour eviter l'erreur
+
 }
