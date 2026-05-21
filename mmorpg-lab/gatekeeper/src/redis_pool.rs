@@ -29,7 +29,6 @@ pub async fn find_available_server(pool: &Pool) -> Result<(StatusCode, Json<serd
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // 3. Check if the server was found (handling your commented-out logic safely)
         let json_text = match raw_json_string {
             Some(text) => text,
             None => continue,

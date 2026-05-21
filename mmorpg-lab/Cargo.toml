@@ -4,7 +4,8 @@ members = [
     "dedicated_server",
     "orchestrator",
     "gatekeeper",
-    "shared"
+    "shared",
+    "game_sockets"
 ]
 
 # Centralized dependency management
@@ -30,3 +31,9 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
