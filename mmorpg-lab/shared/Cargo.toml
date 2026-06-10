@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 serde.workspace = true
+uuid = { version = "1.23.2", features = ["v4"] }

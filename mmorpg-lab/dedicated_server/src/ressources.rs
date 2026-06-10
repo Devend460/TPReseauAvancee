@@ -1,6 +1,7 @@
 ﻿use std::collections::HashMap;
 use std::net::SocketAddr;
-use bevy::prelude::Resource;
+use bevy::prelude::*;
+use uuid::Uuid;
 use game_sockets::{BackendCommand, GameNetworkEvent};
 
 #[derive(Resource)]
@@ -18,8 +19,7 @@ impl ServerConfig {
 
         let zone = std::env::var("DS_ZONE").unwrap_or_else(|_| "zone_A".to_string());
 
-        // 3. Generate a brand new unique identifier (UUID) for this specific process
-        let id = std::env::var("DS_ZONE").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+        let id = std::env::var("DS_ID").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
 
         let orchestrator_addr = std::env::var("ORCH_PORT")
             .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
@@ -48,8 +48,12 @@ pub struct PlayerRegistry {
 
 #[derive(Resource)]
 pub struct NetworkChannels {
-    // Bevy will check this channel every frame for player actions (joins, packet data)
     pub event_rx: tokio::sync::mpsc::UnboundedReceiver<GameNetworkEvent>,
-    // Systems can use this channel to send data or kick players down through QUIC
     pub command_tx: tokio::sync::mpsc::UnboundedSender<BackendCommand>,
+    pub orchestrator_session: Option<uuid::Uuid>,
+}
+
+#[derive(Component)]
+pub struct Player{
+    pub id:Uuid
 }

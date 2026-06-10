@@ -9,3 +9,5 @@ tokio.workspace = true
 redis.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+game_sockets = { path = "../game_sockets" }
+uuid = { version = "1.23.2", features = ["v4"] }
