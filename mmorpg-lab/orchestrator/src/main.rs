@@ -44,28 +44,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = event_rx.recv().await {
             match event {
                 GameNetworkEvent::Message { data, .. } => {
-                    // Map bytes directly to shared packet
                     if let Ok(heartbeat) = serde_json::from_slice::<shared::Heartbeat>(&data) {
                         let server_key = format!("server:{}", heartbeat.id);
 
-                        // Compute current flag state
                         let status = if heartbeat.player_count >= heartbeat.max_players {
                             "full"
                         } else {
-                            "AVAIBLE"
+                            "avaible" // 🌟 En minuscules pour correspondre à votre format !
                         };
 
-                        // Write data fields straight to Redis
+                        // 🌟 CORRECTION 1 : On recrée exactement la structure JSON attendue
+                        let metadata_json = serde_json::json!({
+                            "ip": heartbeat.ip,
+                            "port": heartbeat.port,
+                            "zone": heartbeat.zone,
+                            "status": status,
+                            "players_count": heartbeat.player_count // 🌟 Renommé en players_count
+                        }).to_string();
+
+                        // On stocke le JSON dans le champ unique "metadata"
                         let _: () = redis::pipe()
-                            .hset(&server_key, "ip", &heartbeat.ip)
-                            .hset(&server_key, "port", heartbeat.port)
-                            .hset(&server_key, "zone", &heartbeat.zone)
-                            .hset(&server_key, "status", status)
-                            .hset(&server_key, "players", heartbeat.player_count)
-                            .expire(&server_key, 15) // Prunes automatically if heartbeats fail
+                            .hset(&server_key, "metadata", metadata_json)
+                            .expire(&server_key, 15)
                             .query_async(&mut heartbeat_redis)
                             .await
                             .unwrap();
+
+                        println!("💓 Heartbeat traité et stocké dans metadata pour le serveur : {}", heartbeat.id);
                     }
                 }
                 _ => {}
@@ -94,11 +99,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut highest_port = 7000;
                     if let Ok(keys) = redis::cmd("KEYS").arg("server:*").query_async::<Vec<String>>(&mut scaler_redis).await {
                         for key in keys {
-                            // 🌟 FIXED: Changed `<_, String>` to `<String>`
-                            if let Ok(p_str) = redis::cmd("HGET").arg(&key).arg("port").query_async::<String>(&mut scaler_redis).await {
-                                if let Ok(p) = p_str.parse::<u16>() {
-                                    if p > highest_port {
-                                        highest_port = p;
+                            // 🌟 CORRECTION 3 : On extrait metadata pour y lire le port de l'instance
+                            if let Ok(metadata_str) = redis::cmd("HGET").arg(&key).arg("metadata").query_async::<String>(&mut scaler_redis).await {
+                                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&metadata_str) {
+                                    if let Some(p) = json_value.get("port").and_then(|v| v.as_u64()) {
+                                        let port_u16 = p as u16;
+                                        if port_u16 > highest_port {
+                                            highest_port = port_u16;
+                                        }
                                     }
                                 }
                             }
@@ -128,10 +136,18 @@ async fn count_available_servers(con: &mut redis::aio::MultiplexedConnection) ->
     let mut available_count = 0;
 
     for key in keys {
-        let status: Option<String> = redis::cmd("HGET").arg(&key).arg("status").query_async(con).await?;
-        if let Some(s) = status {
-            if s == "AVAIBLE" {
-                available_count += 1;
+        // 🌟 CORRECTION 2 : On extrait le champ "metadata" à la place de "status"
+        let metadata_str: Option<String> = redis::cmd("HGET").arg(&key).arg("metadata").query_async(con).await?;
+
+        if let Some(json_str) = metadata_str {
+            // On parse dynamiquement la chaîne JSON
+            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                // On extrait le statut en texte de manière sécurisée
+                if let Some(status) = json_value.get("status").and_then(|v| v.as_str()) {
+                    if status == "avaible" { // 🌟 Vérification du tag en minuscules
+                        available_count += 1;
+                    }
+                }
             }
         }
     }
@@ -140,17 +156,38 @@ async fn count_available_servers(con: &mut redis::aio::MultiplexedConnection) ->
 
 // OS system invocation wrapper
 fn spawn_new_dedicated_server(id: &str, port: u16, zone: &str, orch_port: u16) -> std::io::Result<()> {
-    // Formulate the full SocketAddr format that ressources.rs expects
     let orchestrator_addr = format!("127.0.0.1:{}", orch_port);
 
-    std::process::Command::new("./target/release/dedicated_server")
-        // Inject the precise configuration fields
-        .env("DS_ID", id)                  // Used inside loop 🚀
-        .env("DS_PORT", port.to_string())  // Calculated inside loop 🚀
-        .env("DS_ZONE", zone)              // Defined inside loop 🚀
-        .env("ORCH_PORT", orchestrator_addr)
-        .spawn()?; // Detach into background daemon processing
+    let id_clone = id.to_string();
+    let zone_clone = zone.to_string();
 
-    println!("✨ Process spawned -> Dedicated Server [ID: {}, Port: {}, Zone: {}]", id, port, zone);
+    println!("🛠️ [Orchestrator] Tentative de spawn OS pour le serveur {} sur le port {}...", id, port);
+    // 🌟 LA SOLUTION CÔTÉ ORCHESTRATOR :
+    // On force l'OS à instancier le processus en dehors du pool de threads Tokio.
+    std::thread::spawn(move || {
+        let mut command = std::process::Command::new("./target/debug/dedicated_server");
+
+        command
+            .env("DS_ID", id_clone)
+            .env("DS_PORT", port.to_string())
+            .env("DS_ZONE", zone_clone)
+            .env("ORCH_PORT", orchestrator_addr)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+
+        // Sous Windows, on peut détacher explicitement le processus si nécessaire
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x00000008;
+            command.creation_flags(DETACHED_PROCESS);
+        }
+
+        match command.spawn() {
+            Ok(_) => println!("✨ [Orchestrator] Serveur dédié lancé avec succès (Thread isolé)."),
+            Err(e) => eprintln!("❌ [Orchestrator] Erreur lors du spawn du serveur dédié : {:?}", e),
+        }
+    });
+
     Ok(())
 }

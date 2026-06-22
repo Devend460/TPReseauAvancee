@@ -57,3 +57,6 @@ pub struct NetworkChannels {
 pub struct Player{
     pub id:Uuid
 }
+
+#[derive(Resource, Clone)]
+pub struct TokioHandleResource(pub tokio::runtime::Handle);

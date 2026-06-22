@@ -44,7 +44,6 @@ pub fn route_pubsub_traffic(
                                 if !subscribers.contains(&client_uuid) {
                                     subscribers.push(client_uuid);
                                     let topic_str = String::from_utf8_lossy(&topic);
-                                    println!("➕ Client {} subscribed to spatial topic: {}", client_id, topic_str.trim_end_matches('\0'));
                                 }
                             }
                         }
@@ -64,7 +63,6 @@ pub fn route_pubsub_traffic(
                                 if let Some(subscribers) = manager.subscriptions.get_mut(&topic) {
                                     subscribers.retain(|&uuid| uuid != client_uuid);
                                     let topic_str = String::from_utf8_lossy(&topic);
-                                    println!("➖ Client {} unsubscribed from spatial topic: {}", client_id, topic_str.trim_end_matches('\0'));
                                 }
                             }
                         }
@@ -84,7 +82,7 @@ pub fn route_pubsub_traffic(
                                 let start = buf.position() as usize;
                                 let raw_payload = &data[start..start + payload_len];
 
-                                // 🌟 Build out the unified outbound Broadcast buffer (0x04)
+                                // Build out the unified outbound Broadcast buffer (0x04)
                                 // Layout: [0x04: u8] [payload_len: u16] [payload: ...]
                                 let mut bcast = BytesMut::with_capacity(3 + payload_len);
                                 bcast.put_u8(shared::TAG_BROADCAST);
@@ -119,7 +117,6 @@ pub fn route_pubsub_traffic(
                             if !manager.client_connections.contains_key(&client_id) {
                                 manager.client_connections.insert(client_id, connection.connection_id);
                                 manager.network_to_client_id.insert(connection.connection_id, client_id);
-                                println!("🎮 Registered unique routing mapping for Client ID: {}", client_id);
 
                                 // Remove from internal node tracking array since this belongs to a player client
                                 manager.shard_connections.retain(|&id| id != connection.connection_id);

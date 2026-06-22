@@ -3,13 +3,12 @@ use axum::http::StatusCode;
 use axum::Json;
 use deadpool_redis::Pool;
 use uuid::Uuid;
-use std::collections::HashMap;
 
 pub async fn find_available_server(pool: &Pool) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
     let mut conn = pool.get().await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // 1. Fetch all active server registration keys
+    // 1. Récupérer toutes les clés d'enregistrement des serveurs actifs
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg("server:*")
         .query_async(&mut conn)
@@ -17,50 +16,60 @@ pub async fn find_available_server(pool: &Pool) -> Result<(StatusCode, Json<serd
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     for key in keys {
-        // 2. Fetch the entire flattened hash collection for this server entry
-        let server_data: HashMap<String, String> = redis::cmd("HGETALL")
+        // 2. 🌟 NOUVELLE LOGIQUE : Au lieu de HGETALL, on récupère uniquement le champ "metadata"
+        let metadata_str: Option<String> = redis::cmd("HGET")
             .arg(&key)
+            .arg("metadata")
             .query_async(&mut conn)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // If the hash entry is empty or missing vital metadata, proceed to next
-        if server_data.is_empty() {
+        // Si le champ metadata est manquant pour ce serveur, on passe au suivant
+        let Some(json_str) = metadata_str else {
             continue;
-        }
+        };
 
-        // 3. Extract the server status safely, matching your Orchestrator's exact string "AVAIBLE"
-        let status = server_data.get("status").map(|s| s.as_str()).unwrap_or("");
+        // 3. 🌟 On décode la chaîne JSON présente dans metadata
+        if let Ok(server_json) = serde_json::from_str::<serde_json::Value>(&json_str) {
 
-        if status == "AVAIBLE" {
-            // 4. Safely pull out and format properties
-            let ip = server_data.get("ip").cloned().unwrap_or_else(|| "127.0.0.1".to_string());
+            // 4. Extraction sécurisée du statut en minuscules ("avaible")
+            let status = server_json.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
-            // Safely parse the port string back into an integer
-            let port = server_data.get("port")
-                .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(7001);
+            if status == "avaible" {
+                // 5. Extraction sécurisée des propriétés internes du JSON
+                let ip = server_json.get("ip")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("127.0.0.1")
+                    .to_string();
 
-            let zone = server_data.get("zone").cloned().unwrap_or_else(|| "unknown".to_string());
+                let port = server_json.get("port")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(7001) as u16;
 
-            // Generate a fresh unique session identifier for the incoming player
-            let player_id = Uuid::new_v4().to_string();
+                let zone = server_json.get("zone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
 
-            let json_correct = serde_json::json!({
-                "player_id": player_id,
-                "server": {
-                    "ip": ip,
-                    "port": port,
-                    "zone": zone
-                }
-            });
+                // Génération d'un identifiant de session unique pour le joueur qui se connecte
+                let player_id = Uuid::new_v4().to_string();
 
-            println!("🔀 Routed new user session to server [{}] on port {}", key, port);
-            return Ok((StatusCode::OK, Json(json_correct)));
+                let json_correct = serde_json::json!({
+                    "player_id": player_id,
+                    "server": {
+                        "ip": ip,
+                        "port": port,
+                        "zone": zone
+                    }
+                });
+
+                println!("🔀 Routed new user session to server [{}] on port {}", key, port);
+                return Ok((StatusCode::OK, Json(json_correct)));
+            }
         }
     }
 
-    // Explicitly return a 503 error response if no instances matched the required status
-    println!("⚠️ Login requested but no active servers matched state: 'AVAIBLE'");
+    // Retourne une erreur 503 si aucun serveur n'a le statut "avaible"
+    println!("⚠️ Login requested but no active servers matched state: 'avaible'");
     Ok((StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "No server available"}))))
 }
