@@ -19,7 +19,7 @@ pub struct ServerInfo {
     pub player_count: usize
 }
 
-#[derive(Debug,Deserialize,Clone)]
+#[derive(Debug,Deserialize,Serialize,Clone)]
 pub enum ClientInfo {
     #[serde(rename = "JOIN")]
     Join { username: String },
@@ -27,7 +27,7 @@ pub enum ClientInfo {
     #[serde(rename = "ORCHESTRATOR_START")]
     OrchestratorStart,
 }
-#[derive(Debug,Serialize)]
+#[derive(Debug,Serialize,Deserialize)]
 pub enum DStoClient {
     #[serde(rename = "WELCOME")]
     Welcome { player_id: String}

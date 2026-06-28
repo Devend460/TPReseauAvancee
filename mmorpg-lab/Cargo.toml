@@ -9,8 +9,8 @@ members = [
 
     "brocker",
     "spatial_service",
-    "authority"
-]
+    "authority",
+    "client"]
 
 # Centralized dependency management
 [workspace.dependencies]

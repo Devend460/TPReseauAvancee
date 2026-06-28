@@ -12,3 +12,5 @@ serde_json.workspace = true
 uuid.workspace = true
 game_sockets = { path = "../game_sockets" }
 bytes = "1.11.1"
+tracing.workspace = true
+tracing-subscriber.workspace = true

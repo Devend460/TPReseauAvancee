@@ -181,6 +181,8 @@ dependencies = [
  "game_sockets",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -569,6 +571,8 @@ dependencies = [
  "game_sockets",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -692,6 +696,17 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
+name = "client"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "game_sockets",
+ "serde_json",
+ "shared",
+ "tokio",
+]
 
 [[package]]
 name = "color_quant"
@@ -892,6 +907,8 @@ dependencies = [
  "serde_json",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -2062,6 +2079,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 name = "orchestrator"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "game_sockets",
  "redis",
  "serde",
@@ -3002,6 +3020,8 @@ dependencies = [
  "game_sockets",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

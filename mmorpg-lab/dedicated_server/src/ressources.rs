@@ -21,10 +21,11 @@ impl ServerConfig {
 
         let id = std::env::var("DS_ID").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
 
-        let orchestrator_addr = std::env::var("ORCH_PORT")
-            .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
+        let orchestrator_port_str = std::env::var("ORCH_PORT").unwrap_or_else(|_| "8080".to_string());
+
+        let orchestrator_addr = format!("127.0.0.1:{}", orchestrator_port_str)
             .parse::<std::net::SocketAddr>()
-            .unwrap();
+            .expect("Failed to parse reconstructed Orchestrator address string");
 
         Self {
             id,

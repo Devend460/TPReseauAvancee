@@ -9,6 +9,8 @@ bevy.workspace = true
 tokio.workspace = true
 bincode.workspace = true
 bytes.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 shared = { path = "../shared" }
 game_sockets = { path = "../game_sockets" }

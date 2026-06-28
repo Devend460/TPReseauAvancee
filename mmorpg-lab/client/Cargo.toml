@@ -1,0 +1,12 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio.workspace = true
+bytes = "1"
+serde_json.workspace = true
+
+shared = { path = "../shared" }
+game_sockets = { path = "../game_sockets" } # Adjust path to your network crate

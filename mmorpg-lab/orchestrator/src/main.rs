@@ -5,6 +5,9 @@ use redis::*;
 use std::time::Duration;
 use uuid::Uuid;
 
+
+static DEBUG_PORT:u16 = 7778;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Establish your single multiplexed connection pipeline to Redis
@@ -27,22 +30,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     command_tx.send(bind_command)?;
-
+    let backend = QuicBackend::new();
     // Run the exact same QuicBackend pipeline thread loop
-    tokio::spawn(async move {
-        let backend = QuicBackend::new();
+    std::thread::spawn(move || {
+
         backend.run(command_rx, event_tx);
     });
     println!("🚀 Orchestrator QUIC backend running on port {}", orch_port);
 
     // 4. SPAWN TASK 1: Heartbeat Event Listener
     let mut heartbeat_redis = redis_connection.clone();
-    tokio::spawn(async move {
+    let heartbeat_task = tokio::spawn(async move {
         println!("📡 Awaiting telemetry streams from active dedicated servers...");
 
         // Continuous receive packet loop
         while let Some(event) = event_rx.recv().await {
             match event {
+
+                GameNetworkEvent::Connected(connection) => {
+                    println!("🚀 [Orchestrator] Shard connected with connection ID: {:?}", connection.connection_id);
+
+                    // 🌟 WAKE UP THE DEDICATED SERVER
+                    // By opening a reliable stream from the orchestrator side,
+                    // the dedicated server will receive a `StreamCreated` event
+                    // and unlock its heartbeat sequence!
+                    let control_stream = game_sockets::GameStream::new(1, game_sockets::GameStreamReliability::Reliable);
+
+                    let wake_command = BackendCommand::Send {
+                        connection: connection.connection_id,
+                        stream: control_stream,
+                        data: bytes::Bytes::from("WAKE_UP"),
+                    };
+
+                    let _ = command_tx.send(wake_command);
+                }
+
                 GameNetworkEvent::Message { data, .. } => {
                     if let Ok(heartbeat) = serde_json::from_slice::<shared::Heartbeat>(&data) {
                         let server_key = format!("server:{}", heartbeat.id);
@@ -59,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "port": heartbeat.port,
                             "zone": heartbeat.zone,
                             "status": status,
-                            "players_count": heartbeat.player_count // 🌟 Renommé en players_count
+                            "player_count": heartbeat.player_count
                         }).to_string();
 
                         // On stocke le JSON dans le champ unique "metadata"
@@ -80,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. TASK 2: Scaler Evaluation Loop
     let mut scaler_redis = redis_connection.clone();
-    tokio::spawn(async move {
+    let scaler_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
 
         loop {
@@ -119,14 +141,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Trigger process creation with calculated inputs
                     if let Err(e) = spawn_new_dedicated_server(&dynamic_server_id, next_free_port, target_zone, orch_port) {
                         eprintln!("❌ Error launching server instance process: {:?}", e);
+                    }else{
+                        let server_key = format!("server:{}", dynamic_server_id);
+
+                        // 🌟 CORRECTION 1 : On recrée exactement la structure JSON attendue
+                        let metadata_json = serde_json::json!({
+                            "ip": dynamic_server_id,
+                            "port": next_free_port,
+                            "zone": "zone_A",
+                            "status": "avaible",
+                            "player_count": 1
+                        }).to_string();
+
+                        // On stocke le JSON dans le champ unique "metadata"
+                        let _: () = redis::pipe()
+                            .hset(&server_key, "metadata", metadata_json)
+                            .expire(&server_key, 25)
+                            .query_async(&mut scaler_redis)
+                            .await
+                            .unwrap();
+
                     }
                 }
             }
         }
     });
 
-    // Keep the main thread alive so background spawned tasks continue to execute
-    std::future::pending::<()>().await;
+    let _ = tokio::try_join!(heartbeat_task, scaler_task);
     Ok(())
 }
 
@@ -162,7 +203,7 @@ fn spawn_new_dedicated_server(id: &str, port: u16, zone: &str, orch_port: u16) -
     let zone_clone = zone.to_string();
 
     println!("🛠️ [Orchestrator] Tentative de spawn OS pour le serveur {} sur le port {}...", id, port);
-    // 🌟 LA SOLUTION CÔTÉ ORCHESTRATOR :
+
     // On force l'OS à instancier le processus en dehors du pool de threads Tokio.
     std::thread::spawn(move || {
         let mut command = std::process::Command::new("./target/debug/dedicated_server");
@@ -171,7 +212,7 @@ fn spawn_new_dedicated_server(id: &str, port: u16, zone: &str, orch_port: u16) -
             .env("DS_ID", id_clone)
             .env("DS_PORT", port.to_string())
             .env("DS_ZONE", zone_clone)
-            .env("ORCH_PORT", orchestrator_addr)
+            .env("ORCH_PORT", orch_port.to_string())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
 
