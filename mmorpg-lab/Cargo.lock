@@ -3018,10 +3018,12 @@ dependencies = [
  "bevy",
  "bytes",
  "game_sockets",
+ "serde",
  "shared",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

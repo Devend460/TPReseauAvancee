@@ -7,7 +7,6 @@ use game_sockets::{BackendCommand, GameNetworkEvent};
 use game_sockets::protocols::QuicBackend;
 
 mod brocker_net;
-// 🌟 Pull in the network logic file
 
 #[derive(Resource, Default)]
 pub struct PubSubManager {
@@ -15,6 +14,7 @@ pub struct PubSubManager {
     pub client_connections: HashMap<u32, Uuid>,
     pub network_to_client_id: HashMap<Uuid, u32>,
     pub shard_connections: Vec<Uuid>,
+    pub spatial_server_connection: Option<Uuid>,
 }
 
 #[derive(Resource)]
