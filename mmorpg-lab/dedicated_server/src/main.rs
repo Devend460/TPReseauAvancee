@@ -1,24 +1,28 @@
-use std::env;
-use std::net::SocketAddr;
-use std::time::Duration;
-use bevy::prelude::{Commands, Entity, IntoScheduleConfigs, Query, ResMut};
+
+
 mod ressources;
 
-use bevy::{app::App, MinimalPlugins};
-use bevy::app::{Startup, Update};
-use bevy::prelude::Res;
+use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
-use quinn::crypto::ServerConfig;
+
+use std::env;
+use std::time::Duration;
+use std::fs::File;
+use std::sync::Arc;
+use std::collections::HashMap;
 use uuid::Uuid;
+
 use game_sockets::{GameSocketBackend, GameNetworkEvent, BackendCommand, GameStreamReliability};
 use game_sockets::protocols::QuicBackend;
 use shared::{ClientInfo, DStoClient};
-use crate::ressources::{NetworkChannels, Player,TokioHandleResource};
+use crate::ressources::{NetworkChannels, Player};
+
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-use std::fs::File;
-use std::sync::Arc;
 use tracing::info;
 
+/**
+* Initialisation du fichier de log pour ce serveur (utilisation de marcro de tracing comme info! pour l'utiliser
+*/
 fn init_dedicated_server_logging() {
     let server_port = env::var("DS_PORT").unwrap_or_else(|_| "unknown_port".to_string());
 
@@ -31,16 +35,16 @@ fn init_dedicated_server_logging() {
     let log_file = File::create(&log_filename)
         .expect("Impossible de créer le fichier de log unique du shard");
 
-    // 1. Declare file_layer FIRST
+
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(Arc::new(log_file));
 
-    // 2. Now you can safely use it here
+
     tracing_subscriber::registry()
         .with(filter_layer)
         .with(stdout_layer)
-        .with(file_layer) // ✅ Works now!
+        .with(file_layer)
         .init();
 
     tracing::info!("Log initialisé pour le serveur dédié sur le port {}", server_port);
@@ -49,10 +53,12 @@ fn init_dedicated_server_logging() {
 
 #[tokio::main]
 async fn main() {
+    //Initialisation du fichier de log
     init_dedicated_server_logging();
     App::new()
         .add_plugins(MinimalPlugins)
         .insert_resource(ressources::ServerConfig::from_env())
+        .init_resource::<crate::ressources::PlayerRegistry>()
         .add_systems(Startup, bind_socket)
         .add_systems(Update, (receive_packets, send_heartbeat.run_if(on_timer(Duration::from_secs(5)))).chain()
             .run_if(bevy::prelude::resource_exists::<NetworkChannels>))
@@ -65,12 +71,9 @@ pub fn bind_socket(mut commands: Commands, config: Res<ressources::ServerConfig>
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<GameNetworkEvent>();
     let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<BackendCommand>();
 
-
-
-
     let bind_tx = command_tx.clone();
     let bind_command = BackendCommand::Bind {
-        addr: "0.0.0.0".to_string(), // Bind globally to accept player traffic
+        addr: "0.0.0.0".to_string(), // 0.0.0.0 On ecoute tous le monde
         port: config.port,
     };
 
@@ -81,8 +84,8 @@ pub fn bind_socket(mut commands: Commands, config: Res<ressources::ServerConfig>
     }
 
     let connect_tx = command_tx.clone();
-    let orch_ip = config.orchestrator_addr.ip().to_string();
-    let orch_port = config.orchestrator_addr.port();
+    let orch_ip = config.orch_addr.ip().to_string();
+    let orch_port = config.orch_addr.port();
 
     std::thread::spawn(move || {
         // Start the backend processing loop
@@ -90,8 +93,7 @@ pub fn bind_socket(mut commands: Commands, config: Res<ressources::ServerConfig>
 
         // Spawn a background task to wait for the socket to bind, then connect
         std::thread::spawn(move || {
-            //tokio::time::sleep(Duration::from_millis(500));
-            info!("⏳ Delay finished. Sending Connect command to Orchestrator at {}:{}", orch_ip, orch_port);
+            info!("Sending Connect command to Orchestrator at {}:{}", orch_ip, orch_port);
 
             let connect_command = BackendCommand::Connect {
                 addr: orch_ip,
@@ -104,11 +106,11 @@ pub fn bind_socket(mut commands: Commands, config: Res<ressources::ServerConfig>
         backend.run(command_rx, event_tx);
     });
 
-    commands.insert_resource(NetworkChannels { event_rx, command_tx,orchestrator_session: None });
-    info!("Dispatched Bind request to QUIC backend for port {}", config.port);
+    commands.insert_resource(NetworkChannels { event_rx, command_tx,orch_addr: None });
+    info!("dispatched bind request to QUIC backend for port {}", config.port);
 }
 
-pub fn receive_packets(mut commands: Commands, mut channels: Option<ResMut<NetworkChannels>>,player_query: Query<(Entity, &Player)>,config: Res<crate::ressources::ServerConfig>) {
+pub fn receive_packets(mut commands: Commands, mut channels: Option<ResMut<NetworkChannels>>,mut registry: ResMut<crate::ressources::PlayerRegistry>,config: Res<crate::ressources::ServerConfig>) {
     //Reception des joueur via JOIN
     let Some(mut net) = channels else { return; };
 
@@ -116,37 +118,28 @@ pub fn receive_packets(mut commands: Commands, mut channels: Option<ResMut<Netwo
     while let Ok(event) = net.event_rx.try_recv() {
         match event {
             GameNetworkEvent::Connected(connection) => {
-                if (net.orchestrator_session.is_none()){
-                    info!("👤 Orchestrator connected to shard: {:?}", connection);
-                    net.orchestrator_session = Some(connection.connection_id);
+                //Premmier co forcement orchestrateur (L'orchestraor na pas recus de haerthbeat, donc les joueur ne peuvent pas le connaire)
+                if (net.orch_addr.is_none()){
+                    info!("orchestrator connected to me: {:?}", connection);
+                    net.orch_addr = Some(connection.connection_id);
                 }else{
-                    info!("👤 Local client connected to shard: {:?}", connection);
+                    info!("local client connected to me: {:?}", connection);
                 }
 
             }
 
             GameNetworkEvent::Message { connection, data, stream } => {
-                info!("MESSAGE RESSUS");
-                if let Some(ref orch_conn) = net.orchestrator_session {
-                    if connection.connection_id == *orch_conn {
-                        info!("Orchestrator");
-                        continue;
-                    }
-                }
                 match serde_json::from_slice::<ClientInfo>(&data) {
                     Ok(payload) => {
-                        info!("🎮 Success! Parsed ClientInfo payload successfully.");
                         match payload {
                             ClientInfo::Join { username } => {
-                                info!("🎮 Join recu !");
-                                //Ajout du player(et de sa connection)
-                                commands.spawn((
-                                    Player {
-                                        id: connection.connection_id,
-                                    },
-                                ));
+                                info!("player as join the session, id {}",username);
+                                let connection_uuid = connection.connection_id;
+                                //Securite pour eviter que le meme joueur join 2 fois si il envoie plusieurs fois
+                                if !registry.players.contains_key(&connection_uuid) {
+                                    spawn_player(&mut commands, &mut registry, connection_uuid, username);
+                                }
 
-                                //Construction du JSON de Welcome
                                 let response_payload = DStoClient::Welcome {
                                     player_id: connection.connection_id.to_string(),
                                 };
@@ -154,7 +147,7 @@ pub fn receive_packets(mut commands: Commands, mut channels: Option<ResMut<Netwo
                                 //Serialisation du JSON
                                 if let Ok(serialized_bytes) = serde_json::to_vec(&response_payload) {
 
-                                    //On ouvre la stream pour cet envoie
+                                    //On Reutilise la stream que le joueur c'est servie
                                     let send_command = BackendCommand::Send {
                                         connection: connection.connection_id,
                                         stream: stream,
@@ -165,44 +158,29 @@ pub fn receive_packets(mut commands: Commands, mut channels: Option<ResMut<Netwo
                                     if let Err(e) = net.command_tx.send(send_command) {}
                                 }
                             }
-
-                            ClientInfo::OrchestratorStart => {}
                         }
                     }
                     Err(e) => {
-                        // 🔍 This will reveal if your JSON payload structure is mismatched!
-                        info!("❌ DEBUG: Deserialization failed! Error: {:?}. Raw string: {:?}", e, String::from_utf8_lossy(&data));
+                        info!("mysterious mesage received that i dont know ;(");
                     }
                 }
             }
 
             GameNetworkEvent::StreamCreated (connection, stream) => {
-                info!("📡 Stream {:?} created on connection {:?}", stream, connection);
-
-                // If we don't have our Orchestrator session saved yet, this first stream
-                // tells us who the Orchestrator connection handle belongs to!
-                if net.orchestrator_session.is_none() {
-                    info!("✅ Orchestrator connection captured from stream events: {:?}", connection);
-                    net.orchestrator_session = Some(connection.connection_id);
-                }
+                info!("stream {:?} created on connection {:?}", stream, connection);
             }
 
             GameNetworkEvent::Disconnected(connection) => {
                 let connection_id = connection.connection_id;
 
                 // Si la liaison déconnectée était celle de l'orchestrateur, on libère le slot
-                if net.orchestrator_session == Some(connection_id) {
-                    net.orchestrator_session = None;
-                    info!("⚠️ Liaison avec l'Orchestrateur perdue.");
+                if net.orch_addr == Some(connection_id) {
+                    net.orch_addr = None;
+                    info!("orchestrator discomected");
                 }
 
                 // Suppression du player quand il se déconnecte
-                for (entity, player) in player_query.iter() {
-                    if player.id == connection_id {
-                        commands.entity(entity).despawn();
-                        break;
-                    }
-                }
+                despawn_player(&mut commands, &mut registry, connection.connection_id);
             }
             _ => {}
         }
@@ -217,36 +195,26 @@ pub fn send_heartbeat(
 ) {
     let Some(net) = channels else { return; };
 
-    // Si on n'est pas connecté à un orchestrateur, on attend
-    let Some(orchestrator_uuid) = net.orchestrator_session else {
-        info!("⏳ [Dedicated Server] send_heartbeat en attente... (Pas encore de orchestrator_session active)");
+    // Tant qu'on est pas connecter a l'orchestrateur, on attends n'execute pas
+    let Some(orchestrator_uuid) = net.orch_addr else {
+        info!("send_heartbeat : pas encore de orch_addr");
         return;
     };
 
     let current_players = player_query.iter().count();
 
-    // 🌟 L'ALINEAMENT AVEC L'ORCHESTRATOR :
-    // On détermine le statut en minuscules comme l'attend l'Orchestrator ("avaible" ou "full")
-    let status = if current_players >= config.max_players {
-        "full"
-    } else {
-        "avaible"
-    };
-
-    // On construit un objet JSON dynamique temporaire qui mappe au pixel près
     let heartbeat_json = serde_json::json!({
         "id": config.id.clone(),
         "ip": "127.0.0.1".to_string(),
         "port": config.port,
         "zone": config.zone.clone(),
-        "status": status,
         "player_count": current_players,
         "max_players": config.max_players
     });
 
     let heartbeat_stream = game_sockets::GameStream::new(0, GameStreamReliability::Unreliable);
 
-    // Sérialisation du JSON en tableau d'octets (Bytes)
+    // Sérialisation du JSON en tableau d'octets
     if let Ok(serialized_data) = serde_json::to_vec(&heartbeat_json) {
         let send_command = BackendCommand::Send {
             connection: orchestrator_uuid,
@@ -255,9 +223,47 @@ pub fn send_heartbeat(
         };
 
         if let Err(e) = net.command_tx.send(send_command) {
-            info!("❌ Failed to send heartbeat command: {:?}", e);
+            info!("Failed to send heartbeat command: {:?}", e);
         } else {
-            info!("💓 [Dedicated Server] Heartbeat json push envoyé à l'Orchestrateur.");
+            info!("Heartbeat json sent correctly to orchestrator");
         }
+    }
+}
+
+
+/**
+ Spawn un player dans le monde en (0,0)
+*/
+fn spawn_player(
+    commands: &mut Commands,
+    registry: &mut crate::ressources::PlayerRegistry,
+    connection_uuid: Uuid,
+    username: String,
+) {
+    // Creation de l'entite player
+    let player_entity = commands.spawn((
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        GlobalTransform::default(),
+    )).id();
+
+    let info = crate::ressources::PlayerInfo {
+        uid: connection_uuid.to_string(),
+        username,
+        entity: player_entity,
+    };
+
+    registry.players.insert(connection_uuid, info);
+}
+
+/**
+ Despawn un player dans le monde en fonction de sa connection id
+*/
+fn despawn_player(
+    commands: &mut Commands,
+    registry: &mut crate::ressources::PlayerRegistry,
+    connection_uuid: Uuid,
+) {
+    if let Some(player_info) = registry.players.remove(&connection_uuid) {
+        commands.entity(player_info.entity).despawn();
     }
 }

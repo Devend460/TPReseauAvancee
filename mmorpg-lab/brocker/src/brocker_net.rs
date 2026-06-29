@@ -5,7 +5,6 @@ use game_sockets::{GameNetworkEvent, BackendCommand, GameStreamReliability, Game
 use bytes::{BytesMut, Buf, BufMut};
 use crate::{PubSubManager, BrockerChannels};
 
-/// System that processes incoming raw binary network streams from the QUIC backend channel
 pub fn route_pubsub_traffic(
     mut channels: Option<ResMut<BrockerChannels>>,
     mut manager: ResMut<PubSubManager>,
@@ -15,22 +14,20 @@ pub fn route_pubsub_traffic(
     while let Ok(event) = net.event_rx.try_recv() {
         match event {
             GameNetworkEvent::Connected(connection) => {
-                println!("🔌 New infrastructure link verified on Brocker: {}", connection.connection_id);
-                // Dynamically cache internal loops (simulation shards or spatial microservices)
-                manager.shard_connections.push(connection.connection_id);
+                println!("🔌 [Broker] Liaison brute réseau établie: {}", connection.connection_id);
+                // 💡 CORRECTION: On n'enregistre PAS la connexion dans shard_connections tout de suite.
+                // On attend de lire son premier message pour savoir s'il s'agit d'un Shard ou d'un Client.
             }
 
             GameNetworkEvent::Message { connection, data, .. } => {
                 if data.is_empty() { continue; }
 
-                // Turn the byte payload array into an accessible cursor
                 let mut buf = std::io::Cursor::new(&data);
-                let tag = buf.get_u8(); // Pop Byte 0
+                let tag = buf.get_u8();
 
                 match tag {
                     // -----------------------------------------------------------------
-                    // 0x01: SUBSCRIBE — Triggered by Spatial Service
-                    // Layout: [tag: u8] [client_id: u32] [topic: [u8; 32]]
+                    // 0x01: SUBSCRIBE — Déclenché par le Service Spatial
                     // -----------------------------------------------------------------
                     shared::TAG_SUBSCRIBE => {
                         if buf.remaining() >= 36 {
@@ -38,20 +35,24 @@ pub fn route_pubsub_traffic(
                             let mut topic = [0u8; 32];
                             buf.copy_to_slice(&mut topic);
 
-                            // Find the player's connection handle
+                            // 💡 ÉTAPE 1 : Emprunt IMMUTABLE d'abord. On récupère la valeur et on la copie.
+                            // L'emprunt sur manager s'arrête immédiatement après la fermeture de la condition "if let"
                             if let Some(&client_uuid) = manager.client_connections.get(&client_id) {
+
+                                // 💡 ÉTAPE 2 : Emprunt MUTABLE ensuite. Manager est totalement libre !
                                 let subscribers = manager.subscriptions.entry(topic).or_default();
                                 if !subscribers.contains(&client_uuid) {
                                     subscribers.push(client_uuid);
-                                    let topic_str = String::from_utf8_lossy(&topic);
+                                    println!("📌 [Broker] Client {} (UUID: {}) abonné au topic {:?}", client_id, client_uuid, topic);
                                 }
+                            } else {
+                                println!("⚠️ [Broker] Impossible d'abonner le client {}: connexion non enregistrée", client_id);
                             }
                         }
                     }
 
                     // -----------------------------------------------------------------
-                    // 0x02: UNSUBSCRIBE — Triggered by Spatial Service
-                    // Layout: [tag: u8] [client_id: u32] [topic: [u8; 32]]
+                    // 0x02: UNSUBSCRIBE — Déclenché par le Service Spatial
                     // -----------------------------------------------------------------
                     shared::TAG_UNSUBSCRIBE => {
                         if buf.remaining() >= 36 {
@@ -59,18 +60,20 @@ pub fn route_pubsub_traffic(
                             let mut topic = [0u8; 32];
                             buf.copy_to_slice(&mut topic);
 
+                            // 💡 ÉTAPE 1 : Emprunt IMMUTABLE pour lire l'UUID
                             if let Some(&client_uuid) = manager.client_connections.get(&client_id) {
+
+                                // 💡 ÉTAPE 2 : Emprunt MUTABLE pour nettoyer la liste
                                 if let Some(subscribers) = manager.subscriptions.get_mut(&topic) {
                                     subscribers.retain(|&uuid| uuid != client_uuid);
-                                    let topic_str = String::from_utf8_lossy(&topic);
+                                    println!("🧼 [Broker] Client {} désabonné du topic {:?}", client_id, topic);
                                 }
                             }
                         }
                     }
 
                     // -----------------------------------------------------------------
-                    // 0x03: PUBLISH — Broadcast tick packets from World Shards
-                    // Layout: [tag: u8] [topic: [u8; 32]] [payload_len: u16] [payload: ...]
+                    // 0x03: PUBLISH (Émis par un Shard de simulation)
                     // -----------------------------------------------------------------
                     shared::TAG_PUBLISH => {
                         if buf.remaining() >= 34 {
@@ -78,20 +81,26 @@ pub fn route_pubsub_traffic(
                             buf.copy_to_slice(&mut topic);
                             let payload_len = buf.get_u16_le() as usize;
 
+                            // 💡 IDENTIFICATION AUTOMATIQUE : Si la connexion publie, c'est un Shard !
+                            if !manager.shard_connections.contains(&connection.connection_id) {
+                                println!("⚙️ [Broker] Shard identifié sur la connexion: {}", connection.connection_id);
+                                manager.shard_connections.push(connection.connection_id);
+                            }
+
                             if buf.remaining() >= payload_len {
                                 let start = buf.position() as usize;
                                 let raw_payload = &data[start..start + payload_len];
 
-                                // Build out the unified outbound Broadcast buffer (0x04)
-                                // Layout: [0x04: u8] [payload_len: u16] [payload: ...]
+                                // Construction du paquet de Broadcast (0x04)
                                 let mut bcast = BytesMut::with_capacity(3 + payload_len);
                                 bcast.put_u8(shared::TAG_BROADCAST);
                                 bcast.put_u16_le(payload_len as u16);
                                 bcast.put_slice(raw_payload);
                                 let bcast_bytes = bcast.freeze();
 
-                                // Route snapshots out to all clients registered to this sub-quadrant topic
+                                // Envoi à tous les clients abonnés au topic
                                 if let Some(subscribers) = manager.subscriptions.get(&topic) {
+                                    // Utilisation d'une Stream Unreliable (Stream 0) pour la haute fréquence (positions)
                                     let stream = GameStream::new(0, GameStreamReliability::Unreliable);
                                     for &client_uuid in subscribers {
                                         let _ = net.command_tx.send(BackendCommand::Send {
@@ -106,23 +115,20 @@ pub fn route_pubsub_traffic(
                     }
 
                     // -----------------------------------------------------------------
-                    // 0x05: CLIENT INPUT — Received from Player Clients
-                    // Layout: [tag: u8] [client_id: u32] [input: [u8; 16]]
+                    // 0x05: CLIENT INPUT (Émis par le Client joueur)
                     // -----------------------------------------------------------------
                     shared::TAG_CLIENT_INPUT => {
                         if buf.remaining() >= 20 {
                             let client_id = buf.get_u32_le();
 
-                            // Link connection metadata on first input frame received
+                            // Enregistrement dynamique de la session du joueur lors de son premier input
                             if !manager.client_connections.contains_key(&client_id) {
+                                println!("👤 [Broker] Mapping validé : Client ID {} -> Connexion {}", client_id, connection.connection_id);
                                 manager.client_connections.insert(client_id, connection.connection_id);
                                 manager.network_to_client_id.insert(connection.connection_id, client_id);
-
-                                // Remove from internal node tracking array since this belongs to a player client
-                                manager.shard_connections.retain(|&id| id != connection.connection_id);
                             }
 
-                            // Relay client inputs directly to all underlying world shard solvers
+                            // Relais exclusif du message vers les vrais Shards de simulation
                             let stream = GameStream::new(1, GameStreamReliability::Reliable);
                             for &shard_uuid in &manager.shard_connections {
                                 let _ = net.command_tx.send(BackendCommand::Send {
@@ -135,25 +141,25 @@ pub fn route_pubsub_traffic(
                     }
 
                     _ => {
-                        eprintln!("⚠️ Received unhandled byte header sequence: {:#04X}", tag);
+                        eprintln!("⚠️ [Broker] Tag binaire inconnu ou mal formé : {:#04X}", tag);
                     }
                 }
             }
 
             GameNetworkEvent::Disconnected(connection) => {
-                println!("🔌 Connection severed from Brocker: {}", connection.connection_id);
+                println!("🔌 [Broker] Déconnexion détectée : {}", connection.connection_id);
 
-                // Check if connection belonged to a player client
+                // Nettoyage si c'était un client
                 if let Some(client_id) = manager.network_to_client_id.remove(&connection.connection_id) {
                     manager.client_connections.remove(&client_id);
-                    // Wipe subscription presence from all maps
                     for subscribers in manager.subscriptions.values_mut() {
                         subscribers.retain(|&uuid| uuid != connection.connection_id);
                     }
-                    println!("🧼 Garbage collector cleared session indices for Client: {}", client_id);
+                    println!("🧼 [Broker] Données nettoyées pour le Client joueur: {}", client_id);
                 } else {
-                    // Wipe from infrastructure list if it was an internal server node
+                    // Nettoyage si c'était un Shard
                     manager.shard_connections.retain(|&uuid| uuid != connection.connection_id);
+                    println!("🧼 [Broker] Shard retiré de la liste d'infrastructure.");
                 }
             }
             _ => {}

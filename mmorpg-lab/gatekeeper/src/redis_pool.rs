@@ -8,7 +8,7 @@ pub async fn find_available_server(pool: &Pool) -> Result<(StatusCode, Json<serd
     let mut conn = pool.get().await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // 1. Récupérer toutes les clés d'enregistrement des serveurs actifs
+    //On recupere tous les serveur
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg("server:*")
         .query_async(&mut conn)
@@ -16,7 +16,6 @@ pub async fn find_available_server(pool: &Pool) -> Result<(StatusCode, Json<serd
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     for key in keys {
-        // 2. 🌟 NOUVELLE LOGIQUE : Au lieu de HGETALL, on récupère uniquement le champ "metadata"
         let metadata_str: Option<String> = redis::cmd("HGET")
             .arg(&key)
             .arg("metadata")
@@ -24,17 +23,17 @@ pub async fn find_available_server(pool: &Pool) -> Result<(StatusCode, Json<serd
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // Si le champ metadata est manquant pour ce serveur, on passe au suivant
+        // Securite si metadata est pas la
         let Some(json_str) = metadata_str else {
             continue;
         };
 
-        // 3. 🌟 On décode la chaîne JSON présente dans metadata
         if let Ok(server_json) = serde_json::from_str::<serde_json::Value>(&json_str) {
 
-            // 4. Extraction sécurisée du statut en minuscules ("avaible")
+            //On recupere le status
             let status = server_json.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
+            //On check si le serveur peut accueillir un joueur
             if status == "avaible" {
                 // 5. Extraction sécurisée des propriétés internes du JSON
                 let ip = server_json.get("ip")
@@ -63,13 +62,13 @@ pub async fn find_available_server(pool: &Pool) -> Result<(StatusCode, Json<serd
                     }
                 });
 
-                println!("🔀 Routed new user session to server [{}] on port {}", key, port);
+                println!("Routed new user to server [{}] on port {}", key, port);
                 return Ok((StatusCode::OK, Json(json_correct)));
             }
         }
     }
 
     // Retourne une erreur 503 si aucun serveur n'a le statut "avaible"
-    println!("⚠️ Login requested but no active servers matched state: 'avaible'");
+    println!("Login requested but no active servers matched state: 'avaible'");
     Ok((StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "No server available"}))))
 }

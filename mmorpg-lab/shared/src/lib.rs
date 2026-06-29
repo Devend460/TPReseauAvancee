@@ -23,9 +23,6 @@ pub struct ServerInfo {
 pub enum ClientInfo {
     #[serde(rename = "JOIN")]
     Join { username: String },
-
-    #[serde(rename = "ORCHESTRATOR_START")]
-    OrchestratorStart,
 }
 #[derive(Debug,Serialize,Deserialize)]
 pub enum DStoClient {

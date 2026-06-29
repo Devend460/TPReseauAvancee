@@ -10,7 +10,8 @@ pub struct ServerConfig {
     pub port: u16,
     pub zone: String,
     pub max_players: usize,
-    pub orchestrator_addr: SocketAddr,
+    pub orch_addr: SocketAddr,
+
 }
 impl ServerConfig {
     pub fn from_env() -> Self {
@@ -23,7 +24,7 @@ impl ServerConfig {
 
         let orchestrator_port_str = std::env::var("ORCH_PORT").unwrap_or_else(|_| "8080".to_string());
 
-        let orchestrator_addr = format!("127.0.0.1:{}", orchestrator_port_str)
+        let orch_addr = format!("127.0.0.1:{}", orchestrator_port_str)
             .parse::<std::net::SocketAddr>()
             .expect("Failed to parse reconstructed Orchestrator address string");
 
@@ -32,7 +33,7 @@ impl ServerConfig {
             port,
             zone,
             max_players: 4,
-            orchestrator_addr
+            orch_addr
         }
     }
 }
@@ -41,23 +42,21 @@ impl ServerConfig {
 pub struct PlayerInfo {
     pub uid: String,
     pub username: String,
+    pub entity: Entity,
 }
 #[derive(Resource, Default)]
 pub struct PlayerRegistry {
-    pub players: HashMap<SocketAddr, PlayerInfo>,
+    pub players: HashMap<Uuid, PlayerInfo>,
 }
 
 #[derive(Resource)]
 pub struct NetworkChannels {
     pub event_rx: tokio::sync::mpsc::UnboundedReceiver<GameNetworkEvent>,
     pub command_tx: tokio::sync::mpsc::UnboundedSender<BackendCommand>,
-    pub orchestrator_session: Option<uuid::Uuid>,
+    pub orch_addr: Option<uuid::Uuid>,
 }
 
 #[derive(Component)]
 pub struct Player{
     pub id:Uuid
 }
-
-#[derive(Resource, Clone)]
-pub struct TokioHandleResource(pub tokio::runtime::Handle);
